@@ -73,7 +73,7 @@
     - Update image builder configuration for multi-environment use
     - Deploy common stage using `cdk deploy minmed-common`
 
-- [ ] Task 5 | Build production-ready custom AMI | Priority: P0 | Duration: 4 hours | Dependencies: Task 4
+- [x] Task 5 | Build production-ready custom AMI | Priority: P0 | Duration: 4 hours | Dependencies: Task 4
   - Description: Use Image Builder pipeline to create production-ready AMI with Nginx, PHP 8.4-FPM, EFS utilities, and CloudWatch agent pre-installed
   - Objective Link: Objective 1
   - Resources Needed:
@@ -94,7 +94,7 @@
 
 ### Stage 3: Application Layer Setup
 
-- [ ] Task 6 | Deploy production AppStack with ASG and ALB | Priority: P0 | Duration: 4 hours | Dependencies: Task 3, Task 5
+- [x] Task 6 | Deploy production AppStack with ASG and ALB | Priority: P0 | Duration: 4 hours | Dependencies: Task 3, Task 5
   - Description: Deploy CDK AppStack to provision Auto Scaling Group with launch template, Application Load Balancer, target groups, and CloudWatch monitoring for production WordPress hosting
   - Objective Link: Objective 1
   - Resources Needed:
@@ -122,7 +122,7 @@
 
 ### Stage 4: CI/CD Pipeline Setup
 
-- [ ] Task 7 | Deploy production CICD stack | Priority: P1 | Duration: 3 hours | Dependencies: Task 6
+- [x] Task 7 | Deploy production CICD stack | Priority: P1 | Duration: 3 hours | Dependencies: Task 6
   - Description: Deploy CDK CICD stack to create CodePipeline and CodeBuild project for automated saigon-booking plugin deployments to production EFS
   - Objective Link: Objective 3
   - Resources Needed:
@@ -138,7 +138,6 @@
     - Configure rsync deployment to /home/customer/www/minmed.sg/public_html/wp-content/plugins/saigon-booking
     - Deploy stack using `cdk deploy minmed-prod/cicd-stack`
     - Verify CodeBuild can access EFS
-    - Document pipeline name and CodeBuild project name
 
 ### Stage 5: Data Migration Preparation
 
@@ -154,12 +153,9 @@
     - **FILES**: AWS Console for DataSync setup
   - Deliverable: Configured DataSync task ready for execution
   - Sub-tasks:
-    - Create DataSync agent or use agentless mode for EBS source
-    - Create DataSync source location pointing to EC2 EBS WordPress directory
-    - Create DataSync destination location pointing to production EFS
-    - Configure DataSync task with options: preserve file permissions and ownership, verify data integrity, transfer only changed files (for subsequent syncs)
-    - Document DataSync task ARN and execution commands
-    - Test DataSync with dry-run mode to estimate transfer time
+    - Create a DataSyncStack in staging to create DataSync resources
+
+> **TODO**: Define detail of task 8
 
 - [ ] Task 9 | Perform initial DataSync transfer to EFS | Priority: P0 | Duration: 4 hours | Dependencies: Task 8
   - Description: Execute first complete data synchronization from production EC2 EBS to EFS to transfer all WordPress source files while production is still live
