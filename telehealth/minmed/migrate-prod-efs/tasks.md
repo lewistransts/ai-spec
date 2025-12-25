@@ -1,0 +1,579 @@
+# Production Migration to ASG - Task List
+
+## Phase 1: Provision & Test Infrastructure (Objectives 1, 2, 3)
+
+### Stage 1: Data Layer Setup
+
+- [x] Task 1 | Update prod.config.ts with production environment details | Priority: P0 | Duration: 1 hour | Dependencies: None
+  - Description: Populate production configuration file with VPC IDs, subnet IDs, security group IDs, and other infrastructure references required for CDK stack deployment
+  - Objective Link: Objective 1
+  - Resources Needed:
+    - **FILES**:
+      - `lib/configs/prod.config.ts` - main configuration file to update
+      - `lib/configs/staging.config.ts` - reference for structure
+      - `.agentcrew/plan-migrate-prod/requirements.md` - requirements context
+  - Deliverable: Complete prod.config.ts with all required infrastructure IDs
+  - Sub-tasks:
+    - Add VPC and subnet configurations
+    - Add security group references
+    - Add RDS endpoint configuration
+    - Verify all configuration matches staging structure
+
+- [x] Task 2 | Move staging stacks to shared directory | Priority: P0 | Duration: 30 minutes | Dependencies: None
+  - Description: Relocate stack files from lib/stacks/staging to lib/stacks/shared since they will be used for both staging and production environments
+  - Objective Link: Objective 1
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/staging/` - source directory
+      - `lib/stacks/shared/` - destination directory (create if needed)
+  - Deliverable: Stacks moved to shared directory with updated imports
+  - Sub-tasks:
+    - Create lib/stacks/shared directory
+    - Move data.stack.ts to lib/stacks/shared/
+    - Move app.stack.ts to lib/stacks/shared/
+    - Move cicd.stack.ts to lib/stacks/shared/
+    - Update all import statements in stage files
+    - Update all import statements referencing these stacks
+    - Test staging deployment still works
+
+- [x] Task 3 | Create production DataStack for EFS | Priority: P0 | Duration: 2 hours | Dependencies: Task 1, Task 2
+  - Description: Deploy CDK DataStack to provision EFS file system for production WordPress hosting with encryption and high availability (ElastiCache not included in this migration)
+  - Objective Link: Objective 1, Objective 2
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/shared/data.stack.ts` - reference implementation
+      - `lib/stages/prod.stage.ts` - update to include DataStack
+      - `lib/configs/prod.config.ts` - production configuration
+      - `lib/constructs/storage/efs.construct.ts` - EFS construct
+  - Deliverable: Deployed EFS in production with documented resource IDs
+  - Sub-tasks:
+    - Update DataStack props to make ElastiCache optional
+    - Update prod.stage.ts to instantiate DataStack without ElastiCache
+    - Configure EFS with encryption enabled and RETAIN removal policy
+    - Deploy stack using `cdk deploy minmed-prod/data-stack`
+    - Document EFS file system ID, ARN, and security group ID
+
+### Stage 2: Common Resources (Image Builder)
+
+- [x] Task 4 | Create common stage with ImageBuilderStack | Priority: P0 | Duration: 1 hour | Dependencies: Task 2
+  - Description: Create a new common stage that includes ImageBuilderStack to be shared across environments for custom AMI creation
+  - Objective Link: Objective 1
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stages/common.stage.ts` - create new common stage file
+      - `lib/stacks/shared/image-builder.stack.ts` - move from staging
+      - `bin/minmed.ts` - update to deploy common stage
+  - Deliverable: Common stage with ImageBuilderStack ready for multi-environment use
+  - Sub-tasks:
+    - Move image-builder.stack.ts to lib/stacks/shared/
+    - Create lib/stages/common.stage.ts
+    - Add ImageBuilderStack to common stage
+    - Update bin/minmed.ts to deploy common stage
+    - Remove ImageBuilderStack from staging.stage.ts
+    - Update image builder configuration for multi-environment use
+    - Deploy common stage using `cdk deploy minmed-common`
+
+- [ ] Task 5 | Build production-ready custom AMI | Priority: P0 | Duration: 4 hours | Dependencies: Task 4
+  - Description: Use Image Builder pipeline to create production-ready AMI with Nginx, PHP 8.4-FPM, EFS utilities, and CloudWatch agent pre-installed
+  - Objective Link: Objective 1
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/shared/image-builder.stack.ts` - reference implementation
+      - `lib/image-builder-components/install-nginx.yml` - Nginx component
+      - `lib/image-builder-components/install-php.yml` - PHP component
+      - `lib/image-builder-components/install-efs.yml` - EFS component
+  - Deliverable: Production AMI ID for ASG launch template
+  - Sub-tasks:
+    - Configure Image Builder pipeline for production
+    - Trigger AMI build process
+    - Wait for AMI creation completion (~30 minutes)
+    - Test AMI by launching test EC2 instance
+    - Verify Nginx, PHP-FPM, EFS utilities installed correctly
+    - Document AMI ID in prod.config.ts as asgAmiId
+    - Terminate test instance after verification
+
+### Stage 3: Application Layer Setup
+
+- [ ] Task 6 | Deploy production AppStack with ASG and ALB | Priority: P0 | Duration: 4 hours | Dependencies: Task 3, Task 5
+  - Description: Deploy CDK AppStack to provision Auto Scaling Group with launch template, Application Load Balancer, target groups, and CloudWatch monitoring for production WordPress hosting
+  - Objective Link: Objective 1
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/shared/app.stack.ts` - reference implementation
+      - `lib/stages/prod.stage.ts` - update to include AppStack
+      - `lib/configs/prod.config.ts` - production configuration with all IDs
+      - `lib/constructs/compute/asg.construct.ts` - ASG construct
+      - `lib/ec2-configs/nginx-site.conf` - Nginx configuration
+      - `lib/ec2-configs/php-fpm.conf` - PHP-FPM configuration
+      - `lib/ec2-configs/php.ini` - PHP configuration
+  - Deliverable: Deployed ASG and ALB in production with documented endpoints
+  - Sub-tasks:
+    - Add AppStack to prod.stage.ts with all required props
+    - Configure ASG with min=1, max=3 capacity
+    - Configure EFS mounting to /home/customer/www/minmed.sg
+    - Configure CloudWatch agent for metrics collection
+    - Set up ALB with HTTPS listener using production SSL certificate
+    - Configure target group health checks pointing to /health endpoint
+    - Deploy stack using `cdk deploy minmed-prod/app-stack`
+    - Document ALB DNS name and target group ARN
+    - Verify ASG instance launches successfully
+    - Verify EFS mount on ASG instance
+    - Verify ALB health checks pass
+
+### Stage 4: CI/CD Pipeline Setup
+
+- [ ] Task 7 | Deploy production CICD stack | Priority: P1 | Duration: 3 hours | Dependencies: Task 6
+  - Description: Deploy CDK CICD stack to create CodePipeline and CodeBuild project for automated saigon-booking plugin deployments to production EFS
+  - Objective Link: Objective 3
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/shared/cicd.stack.ts` - reference implementation
+      - `lib/stages/prod.stage.ts` - update to include CICDStack
+      - `lib/configs/prod.config.ts` - production configuration
+  - Deliverable: Deployed CodePipeline for production saigon-booking deployments
+  - Sub-tasks:
+    - Add CICDStack to prod.stage.ts with required props
+    - Configure CodeBuild to mount production EFS
+    - Configure CodeBuild to use production VPC and security groups
+    - Configure rsync deployment to /home/customer/www/minmed.sg/public_html/wp-content/plugins/saigon-booking
+    - Deploy stack using `cdk deploy minmed-prod/cicd-stack`
+    - Verify CodeBuild can access EFS
+    - Document pipeline name and CodeBuild project name
+
+### Stage 5: Data Migration Preparation
+
+- [ ] Task 8 | Configure AWS DataSync for EBS to EFS migration | Priority: P0 | Duration: 2 hours | Dependencies: Task 3
+  - Description: Set up AWS DataSync task to replicate WordPress files from production EC2 EBS volume to new EFS file system with proper permissions and ownership preservation
+  - Objective Link: Objective 2
+  - Resources Needed:
+    - **INFORMATION**:
+      - AWS DataSync documentation
+      - Current production EC2 instance ID (i-0a56196bc349d9699)
+      - EFS file system ID from Task 3
+      - WordPress source path on EC2 instance
+    - **FILES**: AWS Console for DataSync setup
+  - Deliverable: Configured DataSync task ready for execution
+  - Sub-tasks:
+    - Create DataSync agent or use agentless mode for EBS source
+    - Create DataSync source location pointing to EC2 EBS WordPress directory
+    - Create DataSync destination location pointing to production EFS
+    - Configure DataSync task with options: preserve file permissions and ownership, verify data integrity, transfer only changed files (for subsequent syncs)
+    - Document DataSync task ARN and execution commands
+    - Test DataSync with dry-run mode to estimate transfer time
+
+- [ ] Task 9 | Perform initial DataSync transfer to EFS | Priority: P0 | Duration: 4 hours | Dependencies: Task 8
+  - Description: Execute first complete data synchronization from production EC2 EBS to EFS to transfer all WordPress source files while production is still live
+  - Objective Link: Objective 2
+  - Resources Needed:
+    - **INFORMATION**: DataSync task ARN from Task 8, monitoring access
+    - **FILES**: CloudWatch Logs for DataSync task monitoring
+  - Deliverable: Complete WordPress file copy on EFS with documented transfer metrics
+  - Sub-tasks:
+    - Start DataSync task execution
+    - Monitor transfer progress in AWS Console
+    - Verify no errors or warnings during transfer
+    - Document transfer statistics (files copied, data transferred, duration)
+    - Mount EFS on test ASG instance and verify file structure
+    - Verify file permissions (should be nginx:nginx or appropriate user)
+    - Test WordPress functionality on ASG instance with EFS mount
+
+- [ ] Task 10 | Validate EFS data integrity and permissions | Priority: P0 | Duration: 2 hours | Dependencies: Task 9
+  - Description: Comprehensive verification of WordPress files on EFS to ensure correct permissions, ownership, and no corruption occurred during DataSync transfer
+  - Objective Link: Objective 2
+  - Resources Needed:
+    - **INFORMATION**: Expected WordPress directory structure, file permissions
+    - **FILES**: SSH access to ASG instance for file inspection
+  - Deliverable: Validation report confirming data integrity on EFS
+  - Sub-tasks:
+    - SSH to ASG instance and navigate to /home/customer/www/minmed.sg
+    - Verify WordPress core files exist (wp-config.php, wp-content, etc.)
+    - Check file ownership (should be nginx:nginx, UID 997:GID 986)
+    - Verify file permissions (755 for directories, 644 for files)
+    - Compare file count between EBS source and EFS destination
+    - Test WordPress page load from ASG instance
+    - Document any discrepancies or issues found
+
+### Stage 6: Backup & Testing
+
+- [ ] Task 11 | Update production BackupStack for EFS backups | Priority: P1 | Duration: 2 hours | Dependencies: Task 3
+  - Description: Extend existing production BackupStack to include AWS Backup policies for EFS file system with daily snapshots and 30-day retention
+  - Objective Link: Objective 6
+  - Resources Needed:
+    - **FILES**:
+      - `lib/stacks/shared/backup.stack.ts` - existing backup stack to extend
+      - `lib/stages/prod.stage.ts` - pass EFS ARN to BackupStack
+      - AWS Backup documentation for EFS
+  - Deliverable: Configured AWS Backup plan for production EFS
+  - Sub-tasks:
+    - Update BackupStack to accept optional EFS ARN parameter
+    - Create backup plan for EFS with daily schedule at 2 AM UTC
+    - Configure 30-day retention policy for EFS backups
+    - Create backup vault for production backups
+    - Assign EFS resource to backup plan
+    - Deploy updated BackupStack
+    - Verify backup plan created successfully
+    - Document backup plan ARN and vault name
+
+- [ ] Task 12 | Verify RDS automated backup configuration | Priority: P1 | Duration: 1 hour | Dependencies: None
+  - Description: Confirm production RDS instance has automated backups enabled with appropriate retention period and backup window
+  - Objective Link: Objective 6
+  - Resources Needed:
+    - **INFORMATION**: Current RDS backup configuration
+    - **FILES**: AWS RDS console access
+  - Deliverable: Documented RDS backup configuration meeting requirements
+  - Sub-tasks:
+    - Check RDS automated backup setting (should be enabled)
+    - Verify backup retention period (recommend 30 days)
+    - Verify backup window is set to low-traffic period
+    - Check if RDS snapshots exist
+    - Document RDS backup configuration
+    - Update backup settings if necessary
+
+- [ ] Task 13 | Test EFS backup and restore procedure | Priority: P1 | Duration: 3 hours | Dependencies: Task 11
+  - Description: Execute test backup and restore of EFS to validate backup procedures and recovery time objectives before production cutover
+  - Objective Link: Objective 6
+  - Resources Needed:
+    - **INFORMATION**: AWS Backup console access, EFS recovery documentation
+    - **FILES**: Test EFS mount points for restore verification
+  - Deliverable: Documented backup/restore procedure with verified RTO
+  - Sub-tasks:
+    - Trigger on-demand EFS backup
+    - Wait for backup completion and verify success
+    - Document backup completion time and size
+    - Initiate restore to new EFS file system
+    - Monitor restore progress and document duration
+    - Mount restored EFS and verify file integrity
+    - Compare file count and structure with source
+    - Calculate and document Recovery Time Objective (RTO)
+    - Delete test restored EFS after verification
+
+### Stage 7: Pre-Cutover Preparation
+
+- [ ] Task 14 | Attach ASG to current PROD target group and perform stress testing | Priority: P0 | Duration: 4 hours | Dependencies: Task 6
+  - Description: Attach new ASG to the existing production target group to test website connection and perform comprehensive load testing using k6 with workflow scripts from current production dashboard to validate performance under load
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: Current production target group ARN, k6 test scripts from production dashboard
+    - **FILES**:
+      - Production target group configuration
+      - k6 load testing scripts and scenarios
+      - Production traffic baseline metrics
+    - **MACHINE**: k6 load testing tool installed locally or on test instance
+  - Deliverable: Load test results confirming ASG can handle production traffic patterns
+  - Sub-tasks:
+    - Identify current production target group ARN
+    - Attach new ASG to production target group (alongside existing instances)
+    - Verify new ASG instances register as healthy in target group
+    - Configure target group connection draining settings if needed
+    - Set up k6 load testing environment
+    - Obtain k6 test scripts from current production dashboard/workflow
+    - Review and adapt k6 scripts for test scenarios (normal load, peak load, stress test)
+    - Execute baseline load test (normal production traffic simulation)
+    - Execute peak load test (2x normal traffic)
+    - Execute stress test (incrementally increase until failure point)
+    - Monitor CloudWatch metrics during tests (CPU, memory, response time, error rate)
+    - Monitor ALB metrics during tests (request count, target response time, healthy hosts)
+    - Document load test results and performance characteristics
+    - Verify auto-scaling behavior triggers correctly under load
+    - Compare performance against baseline production metrics
+    - Detach ASG from production target group after testing complete
+
+- [ ] Task 15 | Implement scheduler-based auto-scaling for cost optimization | Priority: P1 | Duration: 3 hours | Dependencies: Task 6
+  - Description: Configure scheduled scaling actions for ASG to automatically scale down during low-traffic hours (nighttime) and scale up before peak hours to optimize costs while maintaining performance
+  - Objective Link: Objective 5
+  - Resources Needed:
+    - **INFORMATION**: Production traffic patterns analysis, business hours definition
+    - **FILES**:
+      - `lib/constructs/compute/asg.construct.ts` - update to add scheduled actions
+      - CloudWatch metrics showing hourly traffic patterns
+    - **MACHINE**: AWS CDK for infrastructure deployment
+  - Deliverable: Configured scheduled scaling actions for ASG with documented schedule
+  - Sub-tasks:
+    - Analyze production traffic patterns to identify low-traffic hours
+    - Define scaling schedule based on traffic analysis
+    - Update ASG construct to support scheduled scaling actions
+    - Create scale-down schedule (e.g., reduce to min=1 at 11 PM SGT)
+    - Create scale-up schedule (e.g., increase to desired=2 at 7 AM SGT)
+    - Configure weekend vs weekday schedules if traffic differs
+    - Set timezone to Asia/Singapore for schedules
+    - Deploy updated AppStack with scheduled actions
+    - Verify scheduled actions created in AWS Console
+    - Monitor first scheduled scale-down/scale-up execution
+    - Document schedule configuration and rationale
+    - Calculate estimated cost savings from scheduled scaling
+    - Set up alerts if scheduled actions fail
+
+- [ ] Task 16 | Create final cutover runbook | Priority: P1 | Duration: 2 hours | Dependencies: Task 9
+  - Description: Document detailed step-by-step procedures for final data synchronization and CloudFront origin switch during maintenance window, including timing, commands, and rollback steps
+  - Objective Link: Objective 2, Objective 4
+  - Resources Needed:
+    - **INFORMATION**: DataSync execution time estimates, maintenance window schedule
+    - **FILES**: Create runbook document in `.agentcrew/plan-migrate-prod/cutover-runbook.md`
+  - Deliverable: Cutover runbook with timing estimates and rollback procedures
+  - Sub-tasks:
+    - Document pre-cutover checklist
+    - Document exact DataSync execution commands
+    - Document CloudFront origin switch procedure
+    - Define cutover start criteria
+    - Document timing for each cutover step
+    - Define success criteria for each step
+    - Document rollback procedures if issues arise
+    - Include communication plan for stakeholders
+    - Review runbook with team
+
+- [ ] Task 17 | Schedule production maintenance window | Priority: P0 | Duration: 30 minutes | Dependencies: None
+  - Description: Coordinate and communicate maintenance window for production cutover, selecting low-traffic evening time slot (1-2 hours duration)
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: Production traffic patterns, stakeholder availability
+    - **FILES**: Communication templates for user notifications
+  - Deliverable: Scheduled maintenance window with stakeholder approval
+  - Sub-tasks:
+    - Analyze production traffic patterns to identify lowest-traffic period
+    - Propose 1-2 hour maintenance window (recommend evening 8 PM - 10 PM)
+    - Get approval from stakeholders and management
+    - Send advance notification to users (7 days before)
+    - Send reminder notification (24 hours before)
+    - Document exact maintenance window start and end times
+    - Prepare rollback decision criteria
+
+## Phase 2: Migration (Objectives 4) - Within 1-2 Hours
+
+- [ ] Task 18 | Execute final DataSync synchronization | Priority: P0 | Duration: 30 minutes | Dependencies: Task 9, Task 17
+  - Description: During maintenance window, perform final incremental DataSync to capture any WordPress changes made since initial sync
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: DataSync task ARN, maintenance window schedule
+    - **FILES**: `.agentcrew/plan-migrate-prod/cutover-runbook.md` for reference
+  - Deliverable: EFS synchronized with latest WordPress files
+  - Sub-tasks:
+    - Announce maintenance window start to stakeholders
+    - Put WordPress in maintenance mode on old EC2
+    - Start final DataSync task execution
+    - Monitor DataSync progress
+    - Verify DataSync completes successfully
+    - Verify file count matches source
+    - Document final sync completion time
+
+- [ ] Task 19 | Switch CloudFront origin to new ALB | Priority: P0 | Duration: 20 minutes | Dependencies: Task 18
+  - Description: Switch CloudFront distribution origin from old EC2 ALB to new ASG ALB to direct production traffic to new infrastructure
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: CloudFront distribution ID, new ALB DNS name
+    - **FILES**: CloudFront console access
+  - Deliverable: CloudFront serving traffic from new ASG ALB
+  - Sub-tasks:
+    - Log into CloudFront console
+    - Update origin to point to new ASG ALB DNS name
+    - Save changes and wait for distribution update
+    - Monitor distribution status until deployed
+    - Verify origin change applied successfully
+    - Document exact time of switch
+
+- [ ] Task 20 | Perform post-cutover smoke tests | Priority: P0 | Duration: 30 minutes | Dependencies: Task 19
+  - Description: Execute comprehensive smoke tests to verify WordPress functionality on new infrastructure immediately after cutover
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: Test scenarios covering critical WordPress functionality
+    - **FILES**: WordPress admin access, production domain
+  - Deliverable: Smoke test results confirming system functionality
+  - Sub-tasks:
+    - Clear browser cache and test production domain access
+    - Verify homepage loads correctly
+    - Test WordPress admin login
+    - Create test post/page to verify write operations
+    - Test media upload functionality
+    - Verify plugin functionality (saigon-booking)
+    - Test user-facing forms and interactions
+    - Check browser console for JavaScript errors
+    - Verify SSL certificate shows correctly
+    - Document any issues found
+
+- [ ] Task 21 | Monitor initial production traffic on new infrastructure | Priority: P0 | Duration: 1 hour | Dependencies: Task 20
+  - Description: Closely monitor CloudWatch metrics, ALB health checks, and WordPress logs during first hour after cutover to catch issues early
+  - Objective Link: Objective 4
+  - Resources Needed:
+    - **INFORMATION**: CloudWatch dashboard access, expected baseline metrics
+    - **FILES**: CloudWatch Logs Insights for log analysis
+  - Deliverable: Monitoring report showing stable operation
+  - Sub-tasks:
+    - Monitor ALB target health status continuously
+    - Monitor CloudWatch metrics: CPU, memory, network
+    - Monitor CloudWatch Logs for PHP errors
+    - Monitor CloudWatch Logs for Nginx errors
+    - Check EFS performance metrics
+    - Monitor RDS connection count and query performance
+    - Track response times from CloudFront
+    - Document baseline performance metrics
+    - Note any anomalies or concerning trends
+    - Make Go/No-Go decision on completing cutover
+    - Announce maintenance window completion if successful
+
+## Phase 3: Stop, Backup & Cutoff Unused Resources (Objectives 5, 7)
+
+### Stage 2: Post-Migration Monitoring
+
+- [ ] Task 22 | Create production monitoring dashboard | Priority: P1 | Duration: 2 hours | Dependencies: Task 21
+  - Description: Build comprehensive CloudWatch dashboard for production ASG monitoring covering application, infrastructure, and business metrics
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Key metrics to monitor, CloudWatch Logs Insights queries
+    - **FILES**: CloudWatch dashboard JSON configuration
+  - Deliverable: CloudWatch dashboard for production monitoring
+  - Sub-tasks:
+    - Create CloudWatch dashboard named 'minmed-prod-asg-monitoring'
+    - Add ASG instance count and health widgets
+    - Add ALB request count and response time widgets
+    - Add target health status widget
+    - Add EC2 CPU and memory utilization widgets
+    - Add EFS performance metrics widgets
+    - Add RDS connection count and query performance widgets
+    - Add application error rate from logs widget
+    - Add PHP-FPM and Nginx error log widgets
+    - Configure dashboard auto-refresh
+    - Share dashboard with team
+
+- [ ] Task 23 | Configure production alerts and alarms | Priority: P1 | Duration: 2 hours | Dependencies: Task 22
+  - Description: Set up CloudWatch alarms for critical metrics to proactively detect and alert on production issues
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Alert thresholds based on baseline performance
+    - **FILES**: SNS topic for production alerts
+  - Deliverable: Configured CloudWatch alarms for production monitoring
+  - Sub-tasks:
+    - Create SNS topic for production alerts (if not exists)
+    - Add team email subscriptions to alert SNS topic
+    - Create alarm for ALB unhealthy target count >0
+    - Create alarm for high ALB response time (>3 seconds)
+    - Create alarm for ALB 5xx error rate >5%
+    - Create alarm for ASG instance failure
+    - Create alarm for high CPU utilization >80%
+    - Create alarm for high memory utilization >80%
+    - Create alarm for EFS burst credit depletion
+    - Test alarms by triggering test conditions
+    - Document alarm thresholds and response procedures
+
+- [ ] Task 24 | Establish 7-day monitoring period | Priority: P1 | Duration: 7 days | Dependencies: Task 22
+  - Description: Monitor production environment closely for 7 days post-cutover to identify any issues before decommissioning old infrastructure
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Monitoring dashboard access, on-call rotation
+    - **FILES**: Daily monitoring checklist
+  - Deliverable: 7-day monitoring report confirming stable operation
+  - Sub-tasks:
+    - Review dashboard daily for 7 days
+    - Document any alerts or incidents
+    - Monitor user-reported issues
+    - Track response times and error rates
+    - Monitor auto-scaling behavior
+    - Review application logs daily for errors
+    - Compare performance to baseline
+    - Document any optimization opportunities
+    - Create daily status reports
+    - Final Go/No-Go decision on decommissioning
+
+- [ ] Task 25 | Verify backup execution and success | Priority: P1 | Duration: 1 hour | Dependencies: Task 11
+  - Description: Confirm AWS Backup is executing daily backups of EFS successfully and retention policy is working as configured
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: AWS Backup console access
+    - **FILES**: Backup plan configuration
+  - Deliverable: Confirmed backup execution log
+  - Sub-tasks:
+    - Check AWS Backup console for recent EFS backup jobs
+    - Verify backup jobs completing successfully
+    - Verify backup schedule running at configured time
+    - Check backup vault for stored recovery points
+    - Verify oldest backups being deleted per retention policy
+    - Document backup job history
+    - Set up alarm for backup job failures
+    - Test restore access to recent backup
+
+### Stage 3: Decommissioning
+
+- [ ] Task 26 | Create final snapshot of production EC2 EBS volume | Priority: P1 | Duration: 1 hour | Dependencies: Task 24
+  - Description: Create final EBS snapshot of old production EC2 instance as safety backup before decommissioning
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Production EC2 instance ID (i-0a56196bc349d9699)
+    - **FILES**: AWS EC2 console access
+  - Deliverable: EBS snapshot for long-term retention
+  - Sub-tasks:
+    - Identify all EBS volumes attached to production EC2
+    - Create snapshot of each EBS volume
+    - Tag snapshots with 'FinalBackup-PreDecommission'
+    - Wait for snapshot completion
+    - Verify snapshot status is 'completed'
+    - Set snapshot retention to 90 days or permanent
+    - Document snapshot IDs
+
+- [ ] Task 27 | Stop production EC2 instance | Priority: P1 | Duration: 30 minutes | Dependencies: Task 26
+  - Description: Stop (not terminate) old production EC2 instance to cease billing while retaining ability to restart if issues arise
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Production EC2 instance ID
+    - **FILES**: AWS EC2 console access
+  - Deliverable: Stopped EC2 instance
+  - Sub-tasks:
+    - Verify new ASG environment stable for 7+ days
+    - Get final approval from stakeholders to stop old instance
+    - Stop EC2 instance (do not terminate yet)
+    - Verify instance state changes to 'stopped'
+    - Monitor new environment for 24 hours after stopping old instance
+    - Confirm no issues from stopping old instance
+    - Document instance stop date and time
+
+- [ ] Task 28 | Terminate production EC2 instance | Priority: P2 | Duration: 30 minutes | Dependencies: Task 27
+  - Description: After 14 days of stable operation on new infrastructure, terminate old production EC2 instance permanently
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: Production EC2 instance ID, final approval
+    - **FILES**: AWS EC2 console access
+  - Deliverable: Old production EC2 instance terminated
+  - Sub-tasks:
+    - Confirm 14+ days of stable ASG operation
+    - Verify EBS snapshots exist and accessible
+    - Get final termination approval from stakeholders
+    - Terminate EC2 instance
+    - Verify associated EBS volumes deleted (or retained per policy)
+    - Remove old EC2 security groups if no longer used
+    - Document instance termination date
+
+- [ ] Task 29 | Clean up unused resources | Priority: P2 | Duration: 2 hours | Dependencies: Task 28
+  - Description: Identify and remove or archive unused AWS resources from old production setup to reduce costs
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **INFORMATION**: AWS resource inventory, cost analysis
+    - **FILES**: AWS Console access across services
+  - Deliverable: Cleanup report of removed resources
+  - Sub-tasks:
+    - Review old security groups and delete unused ones
+    - Review old IAM roles and policies, remove if safe
+    - Check for old EBS volumes not attached to instances
+    - Review old CloudWatch log groups and set retention
+    - Check for old S3 artifacts or temporary buckets
+    - Review old load balancers if any exist
+    - Document all resources cleaned up
+    - Estimate cost savings from cleanup
+
+- [ ] Task 30 | Update README.md with project summary | Priority: P2 | Duration: 2 hours | Dependencies: Task 28
+  - Description: Update the project README.md file with comprehensive summary of the production migration, new architecture, deployment procedures, and key resources
+  - Objective Link: Objective 7
+  - Resources Needed:
+    - **FILES**:
+      - `README.md` - main project documentation file
+      - `.agentcrew/plan-migrate-prod/requirements.md` - reference for migration goals
+      - `lib/configs/prod.config.ts` - production configuration details
+      - Architecture diagrams and deployment documentation
+  - Deliverable: Updated README.md with production migration summary
+  - Sub-tasks:
+    - Add section on production ASG architecture overview
+    - Document new production infrastructure components (ASG, ALB, EFS, RDS)
+    - Add deployment instructions for production environment
+    - Document CI/CD pipeline for saigon-booking plugin
+    - Include monitoring and alerting information
+    - Add backup and disaster recovery procedures
+    - Document key resource IDs and endpoints for production
+    - Include troubleshooting guide for common issues
+    - Add migration timeline and milestones achieved
+    - Update contributing guidelines if applicable
